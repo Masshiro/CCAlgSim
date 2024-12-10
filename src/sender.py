@@ -1,53 +1,87 @@
-import socket
-import time
-import numpy as np
+import sys
 import json
+import socket
+import select
+import time
+from tqdm import tqdm
+from src.strategies import SenderStrategy
 
-class Sender:
-    def __init__(self, port: int, lambda_rate: float):
-        """
-        Initialize Sender
-        :param port: sender's binding port
-        :param lambda_rate: Poisson process's λ (packets per second)
-        """
+READ_FLAGS = select.POLLIN | select.POLLPRI
+WRITE_FLAGS = select.POLLOUT
+ERR_FLAGS = select.POLLERR | select.POLLHUP | select.POLLNVAL
+READ_ERR_FLAGS = READ_FLAGS | ERR_FLAGS
+ALL_FLAGS = READ_FLAGS | WRITE_FLAGS | ERR_FLAGS
+
+
+class Sender(object):
+    def __init__(self, port: int, strategy: SenderStrategy) -> None:
         self.port = port
-        self.lambda_rate = lambda_rate
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(('127.0.0.1', port))
-        self.peer_address = None
-        self.sequence_number = 0
-        self.sent_packets = []  # record sent time & seq number
+        self.poller = select.poll()
+        self.poller.register(self.sock, ALL_FLAGS)
+        self.poller.modify(self.sock, ALL_FLAGS)
+        self.peer_addr = None
 
-    def handshake(self, peer_address):
-        """
-        Handshake with Receiver to determine destination address
-        :param peer_address: receiver's address (IP, Port)
-        """
-        self.peer_address = peer_address
-        handshake_msg = json.dumps({'handshake': True}).encode()
-        self.sock.sendto(handshake_msg, self.peer_address)
-        print(f"[Sender] Handshake sent to {self.peer_address}")
+        self.strategy = strategy
 
-    def run(self, duration: int):
+        bind_ip, bind_port = self.sock.getsockname()
+        print(f"Sender: Socket is bound to IP: {bind_ip}, Port: {bind_port}")
+
+    def send(self) -> None:
+        next_segment =  self.strategy.next_packet_to_send()
+        if next_segment is not None:
+            self.sock.sendto(next_segment.encode(), self.peer_addr) # type: ignore
+        time.sleep(0)
+
+    def recv(self):
+        serialized_ack, addr = self.sock.recvfrom(1600)
+        self.strategy.process_ack(serialized_ack.decode())
+
+
+    def handshake(self):
+        """Handshake to establish connection with receiver."""
+
+        while True:
+            msg, addr = self.sock.recvfrom(1600)
+            parsed_handshake = json.loads(msg.decode())
+            if parsed_handshake.get('handshake') and self.peer_addr is None:
+                self.peer_addr = addr
+                self.sock.sendto(json.dumps({'handshake': True}).encode(), self.peer_addr)
+                print('[sender] Connected to receiver: %s:%s\n' % addr)
+                break
+        self.sock.setblocking(0)
+
+    
+    def run(self, seconds_to_run: int):
         """
-        Continuously send packets that match the Poisson distribution
-        :param duration: duration of the experiment in seconds
+        Run the sender with a progress bar indicating the elapsed time.
         """
+        curr_flags = ALL_FLAGS
+        TIMEOUT = 1000  # ms
         start_time = time.time()
-        while time.time() - start_time < duration:
-            # Generate the next sending interval according to 
-            # the Poisson distribution
-            inter_arrival_time = np.random.exponential(1 / self.lambda_rate)
-            time.sleep(inter_arrival_time)
 
-            # generate packet
-            packet = {
-                'sequence_number': self.sequence_number,
-                'timestamp': time.time()
-            }
-            
-            # send packet
-            self.sock.sendto(packet, self.peer_address)
-            self.sent_packets.append(packet)
-            self.sequence_number += 1
-            print(f"[Sender] Packet sent to {self.peer_address} at {time.time()}")
+        # Initialize the progress bar
+        with tqdm(total=seconds_to_run, desc="Progress", unit="s") as pbar:
+            while time.time() - start_time < seconds_to_run:
+                elapsed_time = time.time() - start_time
+
+                # Update the progress bar
+                pbar.update(int(elapsed_time - pbar.n))
+
+                events = self.poller.poll(TIMEOUT)
+                if not events:
+                    self.send()
+                for fd, flag in events:
+                    assert self.sock.fileno() == fd
+
+                    if flag & ERR_FLAGS:
+                        pbar.close()
+                        sys.exit('Error occurred to the channel')
+
+                    if flag & READ_FLAGS:
+                        self.recv()
+
+                    if flag & WRITE_FLAGS:
+                        self.send()

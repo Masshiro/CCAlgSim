@@ -10,4 +10,6 @@ CSC546 Project: Simulation Study on Congestion Control Algorithms
 
 - Average RTT
 
+- Jitter
+
 - Size of congestion window

@@ -49,7 +49,7 @@ class Sender(object):
             if parsed_handshake.get('handshake') and self.peer_addr is None:
                 self.peer_addr = addr
                 self.sock.sendto(json.dumps({'handshake': True}).encode(), self.peer_addr)
-                print('[sender] Connected to receiver: %s:%s\n' % addr)
+                print('[sender] Connected to receiver: %s:%s' % addr)
                 break
         self.sock.setblocking(0)
 

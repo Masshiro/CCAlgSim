@@ -1,3 +1,5 @@
+import os
+import subprocess
 import matplotlib.pyplot as plt
 from subprocess import Popen
 import socket
@@ -8,6 +10,26 @@ from src.sender import Sender
 RECEIVER_FILE = "run_receiver.py"
 AVERAGE_SEGMENT_SIZE = 80
 
+
+def check_current_algorithm():
+    result = subprocess.check_output(['sysctl', 'net.ipv4.tcp_congestion_control'], text=True)
+    return result.strip()
+
+def set_congestion_control(algorithm='cubic'):
+    # obtain all available options
+    options = subprocess.run(['sysctl', 'net.ipv4.tcp_available_congestion_control'], capture_output=True, text=True).stdout.strip('\n').split('=')[1]
+    options = options.split(' ')[1:]
+    if algorithm not in options:
+        raise ValueError(f"{algorithm} is not supported. You can choose from {options}")
+    
+    try:
+        subprocess.run(['sysctl', f'net.ipv4.tcp_congestion_control={algorithm}'], check=True)
+        result = check_current_algorithm()
+        print(f"Current TCP congestion control: {result}")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to set congestion control: {e}")
+
+
 def get_open_udp_port():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -17,17 +39,15 @@ def get_open_udp_port():
     s.close()
     return port
 
-# def print_performance(sender: Sender, num_seconds: int):
-#     print("Results for sender %d:" % sender.port)
-#     print("Total Acks: %d" % sender.strategy.total_acks)
-#     print("Num Duplicate Acks: %d" % sender.strategy.num_duplicate_acks)
-    
-#     print("%% duplicate acks: %f" % ((float(sender.strategy.num_duplicate_acks * 100))/sender.strategy.total_acks))
-#     print("Throughput (bytes/s): %f" % (AVERAGE_SEGMENT_SIZE * (sender.strategy.ack_count/num_seconds)))
-#     print("Average RTT (ms): %f" % ((float(sum(sender.strategy.rtts))/len(sender.strategy.rtts)) * 1000))
-
 
 def print_performance(sender: Sender, num_seconds: int):
+    def cal_jitter(rtt_values): # RFC 3550
+        jitter = 0
+        for i in range(1, len(rtt_values)):
+            diff = abs(rtt_values[i] - rtt_values[i-1])
+            jitter += (diff - jitter) / 16
+        return jitter
+    
     try:
         total_acks = sender.strategy.total_acks
         num_duplicate_acks = sender.strategy.num_duplicate_acks
@@ -38,15 +58,25 @@ def print_performance(sender: Sender, num_seconds: int):
         avg_rtt = (float(sum(rtts)) / len(rtts)) * 1000 if rtts else float('inf')
         total_sent_packets = sender.strategy.total_sent_packets  # 获取总发送包数
         loss_rate = ((total_sent_packets - total_acks) / total_sent_packets) * 100 if total_sent_packets > 0 else 0
+        jitter = cal_jitter(rtts)
 
         print(f"Results for sender with port {sender.port}:")
         print(f"  Total Acks: {total_acks}")
         print(f"  Duplicate Acks: {num_duplicate_acks}")
-        print(f"  % Duplicate Acks: {num_duplicate_acks / total_acks * 100:.2f}%")
+        print(f"  Duplicate Acks Ratio: {num_duplicate_acks / total_acks * 100:.2f}")
         print(f"  Sequential Ack Ratio: {sequential_ack_ratio:.2f}")
         print(f"  Throughput (bytes/s): {throughput:.2f}")
         print(f"  Average RTT (ms): {avg_rtt:.2f}")
         print(f"  Packet Loss Rate: {loss_rate:.2f}%")
+        print(f"  Jitter (ms): {jitter:.2f}")
+
+        return {
+            'Duplicate ACK': round(num_duplicate_acks / total_acks * 100, 2),
+            'Sequential Ack': round(sequential_ack_ratio, 2),
+            'Throughput': round(throughput, 2),
+            'RTT': round(avg_rtt, 2),
+            'Jitter': round(jitter, 2)
+        }
 
     except ZeroDivisionError:
         print(f"Error: No valid data for sender {sender.port}. Check the experiment setup.")
@@ -70,11 +100,14 @@ def run_without_mahimahi(seconds_to_run: int, sender_ip: str, sender_port: int, 
         thread.join()
 
     # Print sender performance
+    results = []
     for sender in senders:
-        print_performance(sender, seconds_to_run)
+        res = print_performance(sender, seconds_to_run)
+        results.append(res)
 
     # Terminate the receiver process
     receiver_process.kill()
+    return results
 
 
 def generate_trace_file(bandwidth_mbps, output_file, duration_seconds):
@@ -85,6 +118,7 @@ def generate_trace_file(bandwidth_mbps, output_file, duration_seconds):
     bandwidth_mbps (float): Desired bandwidth in Mbps.
     output_file (str): Output trace file name.
     duration_seconds (int): Duration of the trace in seconds.
+    more info for trace file: https://n13eho.github.io/mahimahiformatandtransform/
     """
     # Constants
     mtu_bytes = 1500  # Size of an MTU packet in bytes

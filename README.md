@@ -10,6 +10,8 @@ CSC546 Project: Simulation Study on Congestion Control Algorithms
 
 - Average RTT
 
-- Jitter
+- Jitter (RFC 3550)
 
-- Size of congestion window
+$$
+J_i = J_{i-1} + \frac{\vert RTT_{i+1}-RTT_i\vert - J_{i-1}}{16}, \quad J_0 = 0
+$$

@@ -15,17 +15,19 @@ def check_current_algorithm():
     result = subprocess.check_output(['sysctl', 'net.ipv4.tcp_congestion_control'], text=True)
     return result.strip()
 
-def set_congestion_control(algorithm='cubic'):
-    # obtain all available options
+def check_available_ccalgs():
     options = subprocess.run(['sysctl', 'net.ipv4.tcp_available_congestion_control'], capture_output=True, text=True).stdout.strip('\n').split('=')[1]
     options = options.split(' ')[1:]
+    return options
+
+def set_congestion_control(algorithm='cubic'):
+    # obtain all available options
+    options = check_available_ccalgs()
     if algorithm not in options:
         raise ValueError(f"{algorithm} is not supported. You can choose from {options}")
     
     try:
-        subprocess.run(['sysctl', f'net.ipv4.tcp_congestion_control={algorithm}'], check=True)
-        result = check_current_algorithm()
-        print(f"Current TCP congestion control: {result}")
+        subprocess.run(['sudo', 'sysctl', f'net.ipv4.tcp_congestion_control={algorithm}'], check=True)
     except subprocess.CalledProcessError as e:
         print(f"Failed to set congestion control: {e}")
 
@@ -40,7 +42,7 @@ def get_open_udp_port():
     return port
 
 
-def print_performance(sender: Sender, num_seconds: int):
+def print_performance(sender: Sender, num_seconds: int, print_flag):
     def cal_jitter(rtt_values): # RFC 3550
         jitter = 0
         for i in range(1, len(rtt_values)):
@@ -60,15 +62,16 @@ def print_performance(sender: Sender, num_seconds: int):
         loss_rate = ((total_sent_packets - total_acks) / total_sent_packets) * 100 if total_sent_packets > 0 else 0
         jitter = cal_jitter(rtts)
 
-        print(f"Results for sender with port {sender.port}:")
-        print(f"  Total Acks: {total_acks}")
-        print(f"  Duplicate Acks: {num_duplicate_acks}")
-        print(f"  Duplicate Acks Ratio: {num_duplicate_acks / total_acks * 100:.2f}")
-        print(f"  Sequential Ack Ratio: {sequential_ack_ratio:.2f}")
-        print(f"  Throughput (bytes/s): {throughput:.2f}")
-        print(f"  Average RTT (ms): {avg_rtt:.2f}")
-        print(f"  Packet Loss Rate: {loss_rate:.2f}%")
-        print(f"  Jitter (ms): {jitter:.2f}")
+        if print_flag:
+            print(f"Results for sender with port {sender.port}:")
+            print(f"  Total Acks: {total_acks}")
+            print(f"  Duplicate Acks: {num_duplicate_acks}")
+            print(f"  Duplicate Acks Ratio: {num_duplicate_acks / total_acks * 100:.2f}")
+            print(f"  Sequential Ack Ratio: {sequential_ack_ratio:.2f}")
+            print(f"  Throughput (bytes/s): {throughput:.2f}")
+            print(f"  Average RTT (ms): {avg_rtt:.2f}")
+            print(f"  Packet Loss Rate: {loss_rate:.2f}%")
+            print(f"  Jitter (ms): {jitter:.2f}")
 
         return {
             'Duplicate ACK': round(num_duplicate_acks / total_acks * 100, 2),
@@ -84,7 +87,8 @@ def print_performance(sender: Sender, num_seconds: int):
         print(f"Error: Missing attributes in strategy for sender {sender.port}: {e}")
 
 
-def run_without_mahimahi(seconds_to_run: int, sender_ip: str, sender_port: int, senders: List):
+def run_without_mahimahi(seconds_to_run: int, sender_ip: str, sender_port: int, senders: List, print_flag=None):
+    print("[info] Running withOUT mahimahi")
     # Start the receiver process
     cmd = f"python3 {RECEIVER_FILE} {sender_ip} {sender_port}"
     receiver_process = Popen(cmd, shell=True)
@@ -100,10 +104,46 @@ def run_without_mahimahi(seconds_to_run: int, sender_ip: str, sender_port: int, 
         thread.join()
 
     # Print sender performance
-    results = []
     for sender in senders:
-        res = print_performance(sender, seconds_to_run)
-        results.append(res)
+        results = print_performance(sender, seconds_to_run, print_flag)
+
+    # Terminate the receiver process
+    receiver_process.kill()
+    return results
+
+
+def run_with_mahimahi(mahimahi_settings: Dict, seconds_to_run: int, senders: List, print_flag=None):
+    def generate_mahimahi_command(mahimahi_settings: Dict) -> str:
+        if mahimahi_settings.get('loss'):
+            loss_directive = "mm-loss downlink %f" % mahimahi_settings.get('loss')
+        else:
+            loss_directive = ""
+        return "mm-delay {delay} {loss_directive} mm-link traces/{trace_file} traces/{trace_file} --downlink-queue=droptail --downlink-queue-args=bytes={queue_size}".format(
+        delay=mahimahi_settings['delay'],
+        queue_size=mahimahi_settings['queue_size'],
+        loss_directive=loss_directive,
+        trace_file=mahimahi_settings['trace_file']
+        )
+    
+    print("[info] Running with mahimahi")
+    mahimahi_cmd = generate_mahimahi_command(mahimahi_settings)
+
+    sender_ports = " ".join(["$MAHIMAHI_BASE %s" % sender.port for sender in senders])
+    
+    cmd = f"{mahimahi_cmd} -- sh -c 'python3 {RECEIVER_FILE} {sender_ports}'"
+    receiver_process = Popen(cmd, shell=True)
+
+    for sender in senders:
+        sender.handshake()
+    threads = [Thread(target=sender.run, args=[seconds_to_run]) for sender in senders]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    
+    # Print sender performance
+    for sender in senders:
+        results = print_performance(sender, seconds_to_run, print_flag)
 
     # Terminate the receiver process
     receiver_process.kill()

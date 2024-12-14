@@ -18,7 +18,7 @@ class Sender(object):
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(('127.0.0.1', port))
+        self.sock.bind(('0.0.0.0', port))
         self.poller = select.poll()
         self.poller.register(self.sock, ALL_FLAGS)
         self.poller.modify(self.sock, ALL_FLAGS)
@@ -26,8 +26,8 @@ class Sender(object):
 
         self.strategy = strategy
 
-        bind_ip, bind_port = self.sock.getsockname()
-        print(f"Sender: Socket is bound to IP: {bind_ip}, Port: {bind_port}")
+        # bind_ip, bind_port = self.sock.getsockname()
+        # print(f"Sender: Socket is bound to IP: {bind_ip}, Port: {bind_port}")
 
     def send(self) -> None:
         next_segment =  self.strategy.next_packet_to_send()
@@ -85,3 +85,4 @@ class Sender(object):
 
                     if flag & WRITE_FLAGS:
                         self.send()
+            pbar.update(seconds_to_run - pbar.n)

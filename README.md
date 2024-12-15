@@ -18,8 +18,8 @@ $$
 
 # Run
 
-- `docker build -t cc-project .`
-- `docker build --no-cache -t cc-project .` (about 3 minutes)
+- `docker build -t cc-project .` (about 12 seconds)
+- `docker build --no-cache -t cc-project .` (about 4 minutes)
 
 - `docker run --rm --privileged -it cc-project bash`
 

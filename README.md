@@ -44,4 +44,4 @@ $$
 - [x] Enable `mahimahi` to simulate the link
 - [x] Modify `main.py` so that it can automatically run the whole experiment
 - [x] Output formatted (maybe json) files for report drafting
-- [ ] Draw figures
+- [x] Draw figures

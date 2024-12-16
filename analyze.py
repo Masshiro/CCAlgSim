@@ -128,7 +128,7 @@ def draw_5runs_2alg_lines_all(metric='Throughput'):
 
     # 调整布局以避免重叠
     plt.tight_layout(rect=[0.05, 0.05, 1, 1])
-    plt.savefig(f'./results/all_levels_{metric}.png', bbox_inches='tight')
+    plt.savefig(f'./results/all_levels_{metric}.pdf', bbox_inches='tight')
 
 
 # calculate_stats(cc_alg='cubic', level='high')
@@ -163,5 +163,5 @@ def CRN_comparison(metric='Throughput', confidence=.90):
 
 if __name__ == '__main__':
     # draw_5runs_2algs_lines(level='high')
-    # draw_5runs_2alg_lines_all()
-    CRN_comparison()
+    draw_5runs_2alg_lines_all()
+    # CRN_comparison()

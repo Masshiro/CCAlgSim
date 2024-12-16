@@ -10,8 +10,8 @@ from datetime import datetime
 # generate_trace_file(100, './traces/high_100mbps.trace', 60)
 
 
-RUN_TIMES = 2
-DURATION_PER_RUN = 3 # seconds
+RUN_TIMES = 5
+DURATION_PER_RUN = 60 # seconds
 LAMBDAS = {
     'low': 2 * 10 * 1e6 / 12000.0,
     'med': 2 * 30 * 1e6 / 12000.0,
@@ -22,7 +22,6 @@ EXP_SETTINGS = {
         'mahimahi': {
             'delay': 88,
             'queue_size': 26400,
-            # 'loss': 0.1,
             'trace_file': 'low_10mbps.trace'
         },
         'lambda': LAMBDAS['low']
@@ -31,7 +30,6 @@ EXP_SETTINGS = {
         'mahimahi': {
             'delay': 88,
             'queue_size': 26400,
-            # 'loss': 0.1,
             'trace_file': 'med_30mbps.trace'
         },
         'lambda': LAMBDAS['med']
@@ -40,17 +38,17 @@ EXP_SETTINGS = {
         'mahimahi': {
             'delay': 88,
             'queue_size': 26400,
-            # 'loss': 0.1,
             'trace_file': 'high_100mbps.trace'
         },
         'lambda': LAMBDAS['high']
     }
 }
+SEEDS = [2518, 3889, 5294, 540, 3205]
 
 
 # def one_run(setting):
 #     port = get_open_udp_port()
-#     res = run_with_mahimahi(setting['mahimahi'], DURATION_PER_RUN, [Sender(port, PoissonPacketStrategy(setting['lambda']))], print_flag=False)
+#     res = run_with_mahimahi(setting['mahimahi'], DURATION_PER_RUN, [Sender(port, PoissonPacketStrategy(1000, setting['lambda']))], print_flag=False)
 #     return res
 
 # def main():
@@ -90,39 +88,34 @@ EXP_SETTINGS = {
 #     return exp_results, file_name
 
 
-def one_run(setting, cc_alg='cubic'):
+def one_run(setting, cc_alg='cubic', seed=None):
     port = get_open_udp_port()
     if cc_alg == 'cubic':
-        res = run_with_mahimahi(setting['mahimahi'], DURATION_PER_RUN, [Sender(port, CubicStrategy(slow_start_thresh=10, initial_cwnd=1, rate_lambda=setting['lambda']))], print_flag=False)
+        res = run_with_mahimahi(setting['mahimahi'], DURATION_PER_RUN, [Sender(port, CubicStrategy(slow_start_thresh=10, initial_cwnd=1, rate_lambda=setting['lambda'], seed=seed))], print_flag=False)
     else:
-        res = run_with_mahimahi(setting['mahimahi'], DURATION_PER_RUN, [Sender(port, RenoStrategy(slow_start_thresh=10, initial_cwnd=1, rate_lambda=setting['lambda']))], print_flag=False)
+        res = run_with_mahimahi(setting['mahimahi'], DURATION_PER_RUN, [Sender(port, RenoStrategy(slow_start_thresh=10, initial_cwnd=1, rate_lambda=setting['lambda'], seed=seed))], print_flag=False)
     return res
 
 
 def main():
     # Get all available CC algorithms
-    options = check_available_ccalgs()
-    if len(options) >= 2:
-        options = options[0:2]
-    else:
-        raise ValueError(f"Host machine should have more than 2 algorithms to run this script.")
+    options = 'reno', 'cubic'
 
     exp_results = {}
     for cc_alg in options:
         # switch the algorithm and verify
-        set_congestion_control(cc_alg)
-        curr_ccalg = check_current_algorithm()
-        print(f'\n=> Switched to congestion control algorithm: {curr_ccalg}')
+        print(f'\n=> Switched to congestion control algorithm: {cc_alg}')
 
         # run each setting multiple times
         exp_results[cc_alg] = defaultdict(dict)
         for setting in EXP_SETTINGS:
             multi_run_results = []
             for i in range(RUN_TIMES):
-                print(f"\n=> => Setting: {setting}; Run ({i+1}/{RUN_TIMES})")
-                res = one_run(EXP_SETTINGS[setting], cc_alg)
+                print(f"\n==> Setting: {setting}; Run ({i+1}/{RUN_TIMES})")
+                res = one_run(EXP_SETTINGS[setting], cc_alg, seed=SEEDS[i%5])
                 multi_run_results.append(res)
-            exp_results[cc_alg][setting] = {key: [d[key] for d in multi_run_results] for key in multi_run_results[0]}
+            exp_results[cc_alg][setting] = {
+                key: [d[key] if key != "CWND" else d[key] for d in multi_run_results] for key in multi_run_results[0]}
     
     current_date = datetime.now().strftime("%m-%d_%H-%M")
     output_dir = '/app/results'  # Directories mounted in the container
@@ -131,22 +124,10 @@ def main():
 
     with open(file_name, 'w') as json_file:
         json.dump(exp_results, json_file, indent=4)
-    print(f"\nExperient is done. Results are saved to {file_name}.")
+    print(f"\nExperiment is done. Results are saved to {file_name}")
 
     return exp_results, file_name
 
 
 if __name__ == "__main__":
     _, file_name = main()
-    # import time
-
-    # info = time.get_clock_info('time')
-    # print(f"Resolution: {info.resolution} seconds")
-
-    # start = time.time()
-    # end = time.time()
-    # print(f"Time difference: {end - start}")
-
-    # for _ in range(10):
-    #     inter_departure_time = random.expovariate(LAMBDAS['low'])
-    #     print(inter_departure_time)

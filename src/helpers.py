@@ -78,7 +78,8 @@ def print_performance(sender: Sender, num_seconds: int, print_flag):
             'Sequential Ack': round(sequential_ack_ratio, 2),
             'Throughput': round(throughput, 2),
             'RTT': round(avg_rtt, 2),
-            'Jitter': round(jitter, 2)
+            'Jitter': round(jitter, 2),
+            'CWND': sender.strategy.cwnds
         }
 
     except ZeroDivisionError:

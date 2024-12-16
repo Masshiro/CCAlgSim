@@ -28,22 +28,20 @@ class SenderStrategy(object):
         raise NotImplementedError
 
 class PoissonPacketStrategy(SenderStrategy):
-    def __init__(self, rate_lambda: float) -> None:
+    def __init__(self, cwnd: int, rate_lambda: float) -> None:
         super().__init__()
-        # self.cwnd = cwnd
+        self.cwnd = cwnd
         self.rate_lambda = rate_lambda
         self.next_send_time = 0
         self.expected_next_ack = 0  # Tracks the expected next acknowledgment sequence number
         self.sequential_ack_count = 0  # Counts sequential acknowledgments
 
-    # def window_is_open(self) -> bool:
-    #     return self.seq_num - self.next_ack < self.cwnd
+    def window_is_open(self) -> bool:
+        return self.seq_num - self.next_ack < self.cwnd
 
     def next_packet_to_send(self) -> Optional[str]:
         current_time = time.time()
-        # if not self.window_is_open() or current_time < self.next_send_time:
-        #     return None
-        if current_time < self.next_send_time:
+        if not self.window_is_open() or current_time < self.next_send_time:
             return None
 
         serialized_data = json.dumps({
@@ -87,7 +85,7 @@ class PoissonPacketStrategy(SenderStrategy):
             self.rtts.append(rtt)
             self.ack_count += 1
             self.expected_next_ack = ack['seq_num'] + 1
-        # self.cwnds.append(self.cwnd)
+        self.cwnds.append(self.cwnd)
 
     def sequential_ack_ratio(self) -> float:
         if self.total_acks == 0:
@@ -96,11 +94,12 @@ class PoissonPacketStrategy(SenderStrategy):
 
 
 class RenoStrategy(SenderStrategy):
-    def __init__(self, slow_start_thresh: int, initial_cwnd: int, rate_lambda: float) -> None:
+    def __init__(self, slow_start_thresh: int, initial_cwnd: int, rate_lambda: float, seed: int) -> None:
         self.slow_start_thresh = slow_start_thresh
         self.cwnd = initial_cwnd
         self.rate_lambda = rate_lambda
         self.sequential_ack_count = 0  # Sequential ACK counter
+        self.seed = seed
 
         # Track duplicate ACKs for fast retransmission
         self.num_duplicate_acks = 0
@@ -116,6 +115,8 @@ class RenoStrategy(SenderStrategy):
         current_time = time.time()
 
         # Poisson-based inter-departure time
+        if self.seed != None:
+            random.seed(self.seed)
         inter_departure_time = random.expovariate(self.rate_lambda)
         if current_time < self.start_time + inter_departure_time:
             return None
@@ -188,16 +189,25 @@ class RenoStrategy(SenderStrategy):
 
 
 class CubicStrategy(SenderStrategy):
-    def __init__(self, slow_start_thresh: int, initial_cwnd: int, rate_lambda: float) -> None:
+    def __init__(self, slow_start_thresh: int, initial_cwnd: int, rate_lambda: float, seed: int) -> None:
         self.slow_start_thresh = slow_start_thresh
         self.cwnd = initial_cwnd
         self.rate_lambda = rate_lambda
         self.sequential_ack_count = 0  # Sequential ACK counter
+        self.seed = seed
 
         # Cubic parameters
         self.C = 0.4  # Cubic scaling factor
         self.cwnd_max = initial_cwnd  # Last maximum cwnd
         self.t_start = time.time()  # Start time for cubic function
+
+        # Duplicate ACK tracking
+        self.num_duplicate_acks = 0
+        self.last_ack_seq = None
+        self.curr_duplicate_acks = 0  # Current duplicate ACKs for the same sequence number
+        
+        # Smoothed RTT
+        self.smoothed_rtt = None
 
         super().__init__()
 
@@ -217,6 +227,8 @@ class CubicStrategy(SenderStrategy):
             return None
 
         # Poisson-based inter-departure time
+        if self.seed != None:
+            random.seed(self.seed)
         inter_departure_time = random.expovariate(self.rate_lambda)
         if current_time < self.start_time + inter_departure_time:
             return None
@@ -239,13 +251,21 @@ class CubicStrategy(SenderStrategy):
         self.times_of_acknowledgements.append(((time.time() - self.start_time), ack['seq_num']))
 
         if self.unacknowledged_packets.get(ack['seq_num']) is None:
-            # Duplicate ack handling
-            self.num_duplicate_acks += 1
-            if self.num_duplicate_acks == 3:
+            # Duplicate ACK handling
+            if self.last_ack_seq == ack['seq_num']:
+                self.curr_duplicate_acks += 1
+            else:
+                self.last_ack_seq = ack['seq_num']
+                self.curr_duplicate_acks = 1
+
+            # Trigger fast retransmit on 3 duplicate ACKs
+            if self.curr_duplicate_acks == 3:
                 self.slow_start_thresh = max(1, self.cwnd // 2)
-                self.cwnd = 1
+                # self.cwnd = self.slow_start_thresh
+                self.cwnd = max(self.slow_start_thresh, self.cwnd * 0.7)  # Limit reduction
                 self.cwnd_max = self.cwnd  # Update cubic parameters
-                self.t_start = time.time()
+                self.t_start = time.time()  # Reset cubic timer
+                self.num_duplicate_acks += 1  # Increment total duplicate ACK counter
         elif ack['seq_num'] >= self.next_ack:
             # Successful ACK, move window
             self.unacknowledged_packets = {
@@ -258,6 +278,11 @@ class CubicStrategy(SenderStrategy):
             rtt = float(time.time() - ack['send_ts'])
             self.rtts.append(rtt)
 
+            # Update smoothed RTT
+            self.smoothed_rtt = (
+                0.875 * self.smoothed_rtt + 0.125 * rtt if self.smoothed_rtt else rtt
+            )
+            
             # Count sequential ACKs
             if ack['seq_num'] == self.next_ack - 1:
                 self.sequential_ack_count += 1

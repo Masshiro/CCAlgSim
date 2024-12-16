@@ -32,7 +32,7 @@ $$
 
 ## Corresponding $\lambda$ rates
 - Calculation method: $\lambda_{\max} = \frac{B}{1500\times 8}$
-- Set $70\%$ maximum bandwith as target packeting rate: $\lambda_i = 0.7*\lambda_{\max}$
+- Set $70\%$ maximum bandwith as target packeting rate: $\lambda_i = 2*\lambda_{\max}$
 
 
 # Notes

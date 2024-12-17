@@ -34,11 +34,6 @@ $$
 - Calculation method: $\lambda_{\max} = \frac{B}{1500\times 8}$
 - Set $70\%$ maximum bandwith as target packeting rate: $\lambda_i = 2*\lambda_{\max}$
 
-
-# Notes
-
-代码的逻辑是receiver发送数据包，然后sender收到后进行handshake，也就是简化成了两步握手。这样的话，sender如果bind到127.0.0.1的话，就无法接收到使用mahimahi模拟链路后，receiver发出的数据包，所以我应该bind 0.0.0.0
-
 # TODO
 - [x] Switch CC algorithms simply with script
 - [x] Enable `mahimahi` to simulate the link
